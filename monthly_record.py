@@ -7,7 +7,7 @@ from datetime import datetime
 from flask import Flask
 from threading import Thread
 
-# Flask server to keep Replit bot alive
+# Flask server to keep bot alive (only needed on Replit, not Railway)
 app = Flask('')
 
 @app.route('/')
@@ -20,7 +20,7 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# Enable privileged intents
+# Discord bot intents
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -31,42 +31,36 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
-@bot.event
 
+@bot.event
 async def on_voice_state_update(member, before, after):
     uid = str(member.id)
     now = datetime.utcnow()
     now_str = now.isoformat()
 
-    # Get ISO week format
-    year, week_num, _ = now.isocalendar()
-    csv_filename = f"attendance_{year}-W{week_num:02d}.csv"
-
     joined_channel = before.channel is None and after.channel is not None
     left_channel = before.channel is not None and after.channel is None
 
-    if joined_channel or left_channel:
-        action = "Joined" if joined_channel else "Left"
-        channel = after.channel.name if joined_channel else before.channel.name
+    if not joined_channel and not left_channel:
+        return  # Skip moves within same channel
 
-        # Log to console
-        print(f"{member.name} {action} {channel} at {now_str}")
+    channel = after.channel.name if joined_channel else before.channel.name
+    action = "Joined" if joined_channel else "Left"
 
-        # Append to weekly CSV
-        file_exists = os.path.isfile(csv_filename)
-        with open(csv_filename, "a", newline="", encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile)
-            if not file_exists:
-                writer.writerow(["User ID", "Username", "Action", "Channel", "Timestamp"])
-            writer.writerow([uid, member.name, action, channel, now_str])
+    # Log to console
+    print(f"{member.name} {action} {channel} at {now_str}")
 
+    # Save to CSV (weekly file)
+    year, week_num, _ = now.isocalendar()
+    csv_filename = f"attendance_{year}-W{week_num:02d}.csv"
+    file_exists = os.path.isfile(csv_filename)
+    with open(csv_filename, "a", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        if not file_exists:
+            writer.writerow(["User ID", "Username", "Action", "Channel", "Timestamp"])
+        writer.writerow([uid, member.name, action, channel, now_str])
 
-@bot.event
-
-async def on_voice_state_update(member, before, after):
-    uid = str(member.id)
-    now = datetime.utcnow().isoformat()
-
+    # Save to JSON
     try:
         with open("attendance.json", "r+") as f:
             try:
@@ -76,22 +70,14 @@ async def on_voice_state_update(member, before, after):
 
             data.setdefault(uid, {"username": member.name, "sessions": []})
 
-            if before.channel is None and after.channel is not None:
-                # Joined a voice channel
-                channel_name = after.channel.name if after.channel else "Unknown"
+            if joined_channel:
                 data[uid]["sessions"].append({
-                    "in": now,
-                    "channel": channel_name
+                    "in": now_str,
+                    "channel": channel
                 })
-                print(f"{member.name} joined {channel_name}")
-
-            elif before.channel is not None and after.channel is None:
-                # Left a voice channel
-                channel_name = before.channel.name if before.channel else "Unknown"
-                if data[uid]["sessions"]:
-                    data[uid]["sessions"][-1]["out"] = now
-                    data[uid]["sessions"][-1]["left_channel"] = channel_name
-                print(f"{member.name} left {channel_name}")
+            elif left_channel and data[uid]["sessions"]:
+                data[uid]["sessions"][-1]["out"] = now_str
+                data[uid]["sessions"][-1]["left_channel"] = channel
 
             f.seek(0)
             json.dump(data, f, indent=2)
@@ -100,9 +86,9 @@ async def on_voice_state_update(member, before, after):
     except Exception as e:
         print("Error updating attendance:", e)
 
+# Start Flask server (optional on Railway, required on Replit)
+# Comment out the line below if using Railway
+# keep_alive()
 
-# Start the Flask ping server
-keep_alive()
-
-# Your actual bot token here (KEEP PRIVATE!)
-bot.run("MTM2NDI4MjA5NTMwMzY1NTQ3NA.GA6mGI.UV-L5CdmGMQQ9CIvuIbWvVGHzYt6O7FqtE_2BE")
+# Run the bot
+bot.run(os.getenv("DISCORD_TOKEN"))
